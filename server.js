@@ -23,8 +23,8 @@ app.set('trust proxy', 1);
 const corsOptions = {
   origin: [
     'https://bootcampchat-fe.run.goorm.site',
-    'http://localhost:3000',
-    'https://localhost:3000',
+    'http://localhost:3002',
+    'https://localhost:3002',
     'http://0.0.0.0:3000',
     'https://0.0.0.0:3000'
   ],
