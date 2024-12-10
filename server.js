@@ -3,6 +3,7 @@ console.log('환경변수 확인:', {
   MONGO_URI: process.env.MONGO_URI,
   NODE_ENV: process.env.NODE_ENV
 });
+
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -11,10 +12,27 @@ const socketIO = require('socket.io');
 const path = require('path');
 const { router: roomsRouter, initializeSocket } = require('./routes/api/rooms');
 const routes = require('./routes');
+const healthRouter = require('./controllers/health');
 
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
+
+// 서버 시작
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => {
+    console.log('MongoDB Connected',process.env.MONGO_URI);
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on port ${PORT}`);
+      console.log('Environment:', process.env.NODE_ENV);
+      console.log('API Base URL:', `http://0.0.0.0:${PORT}/api`);
+    });
+  })
+  .catch(err => {
+    console.log('MongoDB disConnected',process.env.MONGO_URI);
+    console.error('Server startup error:', err);
+    process.exit(1);
+  });
 
 // trust proxy 설정 추가
 app.set('trust proxy', 1);
@@ -23,8 +41,8 @@ app.set('trust proxy', 1);
 const corsOptions = {
   origin: [
     'https://bootcampchat-fe.run.goorm.site',
-    'http://localhost:3002',
-    'https://localhost:3002',
+    'http://localhost:3001',
+    'https://localhost:3001',
     'http://0.0.0.0:3000',
     'https://0.0.0.0:3000'
   ],
@@ -69,6 +87,9 @@ app.get('/health', (req, res) => {
   });
 });
 
+// 새로운 health 체크 엔드포인트
+app.use('/api/v1/health', healthRouter);
+
 // API 라우트 마운트
 app.use('/api', routes);
 
@@ -98,21 +119,5 @@ app.use((err, req, res, next) => {
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
-
-// 서버 시작
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => {
-    console.log('MongoDB Connected',process.env.MONGO_URI);
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running on port ${PORT}`);
-      console.log('Environment:', process.env.NODE_ENV);
-      console.log('API Base URL:', `http://0.0.0.0:${PORT}/api`);
-    });
-  })
-  .catch(err => {
-    console.log('MongoDB disConnected',process.env.MONGO_URI);
-    console.error('Server startup error:', err);
-    process.exit(1);
-  });
 
 module.exports = { app, server };
