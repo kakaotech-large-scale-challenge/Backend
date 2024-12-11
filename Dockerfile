@@ -17,7 +17,7 @@ COPY . .
 COPY .env .env
 
 # 7. 컨테이너가 바인딩할 포트 정의
-EXPOSE 3000
+EXPOSE 5000
 
 # 8. 애플리케이션 실행 명령어
 CMD ["node", "server.js"]
