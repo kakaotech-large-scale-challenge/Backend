@@ -9,6 +9,8 @@ const socketIO = require('socket.io');
 const path = require('path');
 const { router: roomsRouter, initializeSocket } = require('./routes/api/rooms');
 const routes = require('./routes');
+// Redis
+const healthRouter = require('./controllers/health');
 
 const app = express();
 const server = http.createServer(app);
@@ -24,8 +26,11 @@ const corsOptions = {
     'http://localhost:3000',
     'https://localhost:3000',
     'http://0.0.0.0:3000',
-    'https://0.0.0.0:3000'
+    'https://0.0.0.0:3000',
+    'http://chat.goorm-ktb-001.goorm.team',
+    'http://api.chat.goorm-ktb-001.goorm.team'
   ],
+  // origin: '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
@@ -69,6 +74,9 @@ app.get('/health', (req, res) => {
 
 // API 라우트 마운트
 app.use('/api', routes);
+
+// Redis
+app.use('/api/v1/health', healthRouter);
 
 // Socket.IO 설정
 const io = socketIO(server, { cors: corsOptions });
