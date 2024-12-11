@@ -21,16 +21,31 @@ app.set('trust proxy', 1);
 
 // CORS 설정
 const corsOptions = {
-  origin: [
-    'https://bootcampchat-fe.run.goorm.site',
-    'http://localhost:3000',
-    'https://localhost:3000',
-    'http://0.0.0.0:3000',
-    'https://0.0.0.0:3000',
-    'http://chat.goorm-ktb-001.goorm.team',
-    'http://api.chat.goorm-ktb-001.goorm.team'
-  ],
-  // origin: '*',
+  origin: function(origin, callback) {
+    const allowedOrigins = [
+      'https://bootcampchat-fe.run.goorm.site',
+      'http://localhost:3000',
+      'https://localhost:3000',
+      'http://0.0.0.0:3000',
+      'https://0.0.0.0:3000',
+      'http://chat.goorm-ktb-001.goorm.team',
+      'https://chat.goorm-ktb-001.goorm.team',
+      'http://api.chat.goorm-ktb-001.goorm.team',
+      'https://api.chat.goorm-ktb-001.goorm.team'
+    ];
+
+    // origin이 없는 경우(서버 간 요청) 허용
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // allowedOrigins에 포함되어 있거나 development 환경이면 허용
+    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
