@@ -4,14 +4,15 @@ const { upload } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs').promises;
 
-// 회원가입
+// 회원가입 처리 함수
 exports.register = async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
-    // 입력값 검증
+    // 입력값 유효성 검사
     const validationErrors = [];
     
+    // 이름 검증
     if (!name || name.trim().length === 0) {
       validationErrors.push({
         field: 'name',
@@ -24,6 +25,7 @@ exports.register = async (req, res) => {
       });
     }
 
+    // 이메일 검증
     if (!email) {
       validationErrors.push({
         field: 'email',
@@ -36,6 +38,7 @@ exports.register = async (req, res) => {
       });
     }
 
+    // 비밀번호 검증
     if (!password) {
       validationErrors.push({
         field: 'password',
@@ -48,6 +51,7 @@ exports.register = async (req, res) => {
       });
     }
 
+    // 유효성 검사 실패 시 에러 반환
     if (validationErrors.length > 0) {
       return res.status(400).json({
         success: false,
@@ -55,7 +59,7 @@ exports.register = async (req, res) => {
       });
     }
 
-    // 사용자 중복 확인
+    // 이메일 중복 확인
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(409).json({
@@ -64,7 +68,7 @@ exports.register = async (req, res) => {
       });
     }
 
-    // 비밀번호 암호화 및 사용자 생성
+    // 새로운 사용자 객체 생성
     const newUser = new User({ 
       name, 
       email, 
@@ -72,10 +76,12 @@ exports.register = async (req, res) => {
       profileImage: '' // 기본 프로필 이미지 없음
     });
 
+    // 비밀번호 암호화 및 사용자 저장
     const salt = await bcrypt.genSalt(10);
     newUser.password = await bcrypt.hash(password, salt);
     await newUser.save();
 
+    // 성공 응답 반환
     res.status(201).json({
       success: true,
       message: '회원가입이 완료되었습니다.',
@@ -96,9 +102,10 @@ exports.register = async (req, res) => {
   }
 };
 
-// 프로필 조회
+// 사용자 프로필 조회 함수
 exports.getProfile = async (req, res) => {
   try {
+    // 비밀번호를 제외한 사용자 정보 조회
     const user = await User.findById(req.user.id).select('-password');
     if (!user) {
       return res.status(404).json({
@@ -107,6 +114,7 @@ exports.getProfile = async (req, res) => {
       });
     }
 
+    // 프로필 정보 반환
     res.json({
       success: true,
       user: {
@@ -126,11 +134,12 @@ exports.getProfile = async (req, res) => {
   }
 };
 
-// 프로필 업데이트
+// 프로필 정보 업데이트 함수
 exports.updateProfile = async (req, res) => {
   try {
     const { name } = req.body;
 
+    // 이름 유효성 검사
     if (!name || name.trim().length === 0) {
       return res.status(400).json({
         success: false,
@@ -138,6 +147,7 @@ exports.updateProfile = async (req, res) => {
       });
     }
 
+    // 사용자 조회
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({
@@ -146,9 +156,11 @@ exports.updateProfile = async (req, res) => {
       });
     }
 
+    // 이름 업데이트 및 저장
     user.name = name.trim();
     await user.save();
 
+    // 업데이트된 정보 반환
     res.json({
       success: true,
       message: '프로필이 업데이트되었습니다.',
@@ -169,9 +181,10 @@ exports.updateProfile = async (req, res) => {
   }
 };
 
-// 프로필 이미지 업로드
+// 프로필 이미지 업로드 함수
 exports.uploadProfileImage = async (req, res) => {
   try {
+    // 파일 존재 여부 확인
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -179,13 +192,13 @@ exports.uploadProfileImage = async (req, res) => {
       });
     }
 
-    // 파일 유효성 검사
+    // 파일 크기 및 타입 검증
     const fileSize = req.file.size;
     const fileType = req.file.mimetype;
     const maxSize = 5 * 1024 * 1024; // 5MB
 
     if (fileSize > maxSize) {
-      // 업로드된 파일 삭제
+      // 크기 초과 시 업로드된 파일 삭제
       await fs.unlink(req.file.path);
       return res.status(400).json({
         success: false,
@@ -194,7 +207,7 @@ exports.uploadProfileImage = async (req, res) => {
     }
 
     if (!fileType.startsWith('image/')) {
-      // 업로드된 파일 삭제
+      // 이미지 파일이 아닌 경우 업로드된 파일 삭제
       await fs.unlink(req.file.path);
       return res.status(400).json({
         success: false,
@@ -202,9 +215,10 @@ exports.uploadProfileImage = async (req, res) => {
       });
     }
 
+    // 사용자 조회
     const user = await User.findById(req.user.id);
     if (!user) {
-      // 업로드된 파일 삭제
+      // 사용자가 없는 경우 업로드된 파일 삭제
       await fs.unlink(req.file.path);
       return res.status(404).json({
         success: false,
@@ -212,7 +226,7 @@ exports.uploadProfileImage = async (req, res) => {
       });
     }
 
-    // 기존 프로필 이미지가 있다면 삭제
+    // 기존 프로필 이미지 삭제
     if (user.profileImage) {
       const oldImagePath = path.join(__dirname, '..', user.profileImage);
       try {
@@ -236,7 +250,7 @@ exports.uploadProfileImage = async (req, res) => {
 
   } catch (error) {
     console.error('Profile image upload error:', error);
-    // 업로드 실패 시 파일 삭제
+    // 업로드 실패 시 임시 파일 삭제
     if (req.file) {
       try {
         await fs.unlink(req.file.path);
@@ -251,9 +265,10 @@ exports.uploadProfileImage = async (req, res) => {
   }
 };
 
-// 프로필 이미지 삭제
+// 프로필 이미지 삭제 함수
 exports.deleteProfileImage = async (req, res) => {
   try {
+    // 사용자 조회
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({
@@ -262,6 +277,7 @@ exports.deleteProfileImage = async (req, res) => {
       });
     }
 
+    // 기존 프로필 이미지가 있으면 삭제
     if (user.profileImage) {
       const imagePath = path.join(__dirname, '..', user.profileImage);
       try {
@@ -271,6 +287,7 @@ exports.deleteProfileImage = async (req, res) => {
         console.error('Profile image delete error:', error);
       }
 
+      // DB에서 이미지 정보 제거
       user.profileImage = '';
       await user.save();
     }
@@ -289,9 +306,10 @@ exports.deleteProfileImage = async (req, res) => {
   }
 };
 
-// 회원 탈퇴
+// 회원 탈퇴 처리 함수
 exports.deleteAccount = async (req, res) => {
   try {
+    // 사용자 조회
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({
@@ -300,7 +318,7 @@ exports.deleteAccount = async (req, res) => {
       });
     }
 
-    // 프로필 이미지가 있다면 삭제
+    // 프로필 이미지가 있다면 파일 시스템에서 삭제
     if (user.profileImage) {
       const imagePath = path.join(__dirname, '..', user.profileImage);
       try {
@@ -311,6 +329,7 @@ exports.deleteAccount = async (req, res) => {
       }
     }
 
+    // DB에서 사용자 정보 삭제
     await user.deleteOne();
 
     res.json({

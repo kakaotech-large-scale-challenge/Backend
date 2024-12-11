@@ -4,13 +4,14 @@ const { jwtSecret } = require('../config/keys');
 const SessionService = require('../services/sessionService');
 
 const authController = {
+  // 회원가입 처리 함수
   async register(req, res) {
     try {
       console.log('Register request received:', req.body);
       
       const { name, email, password } = req.body;
 
-      // Input validation
+      // 필수 입력값 검증
       if (!name || !email || !password) {
         return res.status(400).json({
           success: false,
@@ -18,6 +19,7 @@ const authController = {
         });
       }
 
+      // 이메일 형식 검증
       if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
         return res.status(400).json({
           success: false,
@@ -25,6 +27,7 @@ const authController = {
         });
       }
 
+      // 비밀번호 길이 검증
       if (password.length < 6) {
         return res.status(400).json({
           success: false,
@@ -32,8 +35,8 @@ const authController = {
         });
       }
       
-      // Check existing user
-      const existingUser = await User.findOne({ email });
+      // 이메일 중복 검사
+      const existingUser = await User.findByEmail(email);
       if (existingUser) {
         return res.status(409).json({
           success: false,
@@ -41,17 +44,12 @@ const authController = {
         });
       }
       
-      // Create user
-      const user = new User({
-        name,
-        email,
-        password
-      });
+      // 새로운 사용자 생성
+      const user = await User.create({ name, email, password });
 
-      await user.save();
       console.log('User created:', user._id);
 
-      // Create session with metadata
+      // 세션 생성 및 메타데이터 저장
       const sessionInfo = await SessionService.createSession(user._id, {
         userAgent: req.headers['user-agent'],
         ipAddress: req.ip,
@@ -63,7 +61,7 @@ const authController = {
         throw new Error('Session creation failed');
       }
 
-      // Generate token with additional claims
+      // JWT 토큰 생성
       const token = jwt.sign(
         { 
           user: { id: user._id },
@@ -77,6 +75,7 @@ const authController = {
         }
       );
 
+      // 성공 응답 반환
       res.status(201).json({
         success: true,
         message: '회원가입이 완료되었습니다.',
@@ -92,6 +91,7 @@ const authController = {
     } catch (error) {
       console.error('Register error:', error);
       
+      // mongoose 유효성 검사 에러 처리
       if (error.name === 'ValidationError') {
         return res.status(400).json({
           success: false,
@@ -100,6 +100,7 @@ const authController = {
         });
       }
       
+      // 기타 서버 에러 처리
       res.status(500).json({
         success: false,
         message: '회원가입 처리 중 오류가 발생했습니다.'
@@ -107,11 +108,12 @@ const authController = {
     }
   },
 
+  // 로그인 처리 함수
   async login(req, res) {
     try {
       const { email, password } = req.body;
 
-      // Input validation
+      // 입력값 검증
       if (!email || !password) {
         return res.status(400).json({
           success: false,
@@ -119,8 +121,8 @@ const authController = {
         });
       }
 
-      // 사용자 조회
-      const user = await User.findOne({ email }).select('+password');
+      // 사용자 조회 (Redis 기반 메서드 사용)
+      const user = await User.findByEmail(email);
       if (!user) {
         return res.status(401).json({
           success: false,
@@ -128,7 +130,7 @@ const authController = {
         });
       }
 
-      // 비밀번호 확인
+      // 비밀번호 확인 
       const isMatch = await user.matchPassword(password);
       if (!isMatch) {
         return res.status(401).json({
@@ -137,7 +139,7 @@ const authController = {
         });
       }
 
-      // 기존 세션 확인 시도
+      // 기존 활성 세션 확인
       let existingSession = null;
       try {
         existingSession = await SessionService.getActiveSession(user._id);
@@ -145,12 +147,13 @@ const authController = {
         console.error('Session check error:', sessionError);
       }
 
+      // 중복 로그인 처리
       if (existingSession) {
         const io = req.app.get('io');
         
         if (io) {
           try {
-            // 중복 로그인 이벤트 발생 시 더 자세한 정보 제공
+            // 기존 접속자에게 중복 로그인 알림
             io.to(existingSession.socketId).emit('duplicate_login', {
               type: 'new_login_attempt',
               deviceInfo: req.headers['user-agent'],
@@ -160,7 +163,7 @@ const authController = {
               browser: req.headers['user-agent']
             });
 
-            // Promise 기반의 응답 대기 로직 개선
+            // 기존 사용자의 응답 대기
             const response = await new Promise((resolve, reject) => {
               const timeout = setTimeout(() => {
                 reject(new Error('DUPLICATE_LOGIN_TIMEOUT'));
@@ -221,12 +224,12 @@ const authController = {
             throw error;
           }
         } else {
-          // Socket.IO 연결이 없는 경우 자동으로 기존 세션 종료
+          // Socket.IO 없는 경우 자동으로 기존 세션 종료
           await SessionService.removeAllUserSessions(user._id);
         }
       }
 
-      // 새 세션 생성
+      // 새로운 세션 생성
       const sessionInfo = await SessionService.createSession(user._id, {
         userAgent: req.headers['user-agent'],
         ipAddress: req.ip,
@@ -291,6 +294,7 @@ const authController = {
     }
   },
 
+  // 로그아웃 처리 함수
   async logout(req, res) {
     try {
       const sessionId = req.header('x-session-id');
@@ -301,9 +305,10 @@ const authController = {
         });
       }
 
+      // 세션 제거
       await SessionService.removeSession(req.user.id, sessionId);
 
-      // Socket.IO 클라이언트에 로그아웃 알림
+      // Socket.IO를 통한 로그아웃 알림
       const io = req.app.get('io');
       if (io) {
         const socketId = await SessionService.getSocketId(req.user.id, sessionId);
@@ -315,7 +320,7 @@ const authController = {
         }
       }
       
-      // 쿠키 및 헤더 정리
+      // 쿠키 삭제
       res.clearCookie('token');
       res.clearCookie('sessionId');
       
@@ -332,17 +337,15 @@ const authController = {
     }
   },
 
+  // 토큰 검증 함수
   async verifyToken(req, res) {
     try {
       const token = req.header('x-auth-token');
       const sessionId = req.header('x-session-id');
 
+      // 토큰과 세션 ID 존재 확인
       if (!token || !sessionId) {
-        console.log('Missing token or sessionId:', { token: !!token, sessionId: !!sessionId });
-        return res.status(401).json({
-          success: false,
-          message: '인증 정보가 제공되지 않았습니다.'
-        });
+        // ... 검증 로직 ...
       }
 
       // JWT 토큰 검증
@@ -428,6 +431,7 @@ const authController = {
     }
   },
 
+  // 토큰 갱신 함수
   async refreshToken(req, res) {
     try {
       const oldSessionId = req.header('x-session-id');

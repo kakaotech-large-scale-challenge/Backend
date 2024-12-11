@@ -61,6 +61,18 @@ const corsOptions = {
 
 // 기본 미들웨어
 app.use(cors(corsOptions));
+
+// 요청 로깅
+if (process.env.NODE_ENV === 'development') {
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+    console.log('Headers:', req.headers);
+    console.log('Query Params:', req.query);
+    console.log('Body:', req.body);
+    next();
+  });
+}
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

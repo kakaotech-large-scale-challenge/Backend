@@ -1,5 +1,5 @@
 // backend/utils/redisClient.js
-const Redis = require('redis');
+const { createClient } = require('redis');
 const { redisHost, redisPort } = require('../config/keys');
 
 class RedisClient {
@@ -19,18 +19,8 @@ class RedisClient {
     try {
       console.log('Connecting to Redis...');
 
-      this.client = Redis.createClient({
-        url: `redis://${redisHost}:${redisPort}`,
-        socket: {
-          host: redisHost,
-          port: redisPort,
-          reconnectStrategy: (retries) => {
-            if (retries > this.maxRetries) {
-              return null;
-            }
-            return Math.min(retries * 50, 2000);
-          }
-        }
+      this.client = createClient({
+        url: `redis://${redisHost}:${redisPort}`
       });
 
       this.client.on('connect', () => {
@@ -52,6 +42,16 @@ class RedisClient {
       this.isConnected = false;
       this.retryConnection();
       throw error;
+    }
+  }
+
+  retryConnection() {
+    if (this.connectionAttempts < this.maxRetries) {
+      this.connectionAttempts++;
+      console.log(`Retrying Redis connection in ${this.retryDelay}ms... Attempt ${this.connectionAttempts}/${this.maxRetries}`);
+      setTimeout(() => this.connect().catch(() => {}), this.retryDelay);
+    } else {
+      console.error('Max Redis connection attempts reached. Could not connect to Redis.');
     }
   }
 
