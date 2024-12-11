@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const healthRouter = require('../controllers/health');
 
 // Import route modules
 const authRoutes = require('./api/auth');
@@ -37,5 +38,6 @@ router.use('/auth', authRoutes);
 router.use('/users', userRoutes);
 router.use('/rooms', roomsRouter);  // roomsRouter로 변경
 router.use('/files', fileRoutes);
+router.use('/v1/health', healthRouter);
 
 module.exports = router;
