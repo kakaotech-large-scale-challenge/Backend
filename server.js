@@ -20,11 +20,7 @@ app.set('trust proxy', 1);
 // CORS 설정
 const corsOptions = {
   origin: [
-    'https://bootcampchat-fe.run.goorm.site',
-    'http://localhost:3000',
-    'https://localhost:3000',
-    'http://0.0.0.0:3000',
-    'https://0.0.0.0:3000'
+    '*',
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
