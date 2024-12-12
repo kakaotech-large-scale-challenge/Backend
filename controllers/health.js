@@ -6,7 +6,7 @@ const Redis = require('ioredis'); // 데이터베이스 연결을 위한 모듈
 
 // Redis 클라이언트 설정
 const redis = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
+    host: process.env.REDIS_MASTER1 || 'localhost',
     port: process.env.REDIS_PORT || 6379,
     // 필요한 경우 추가 옵션 설정
     // password: process.env.REDIS_PASSWORD,
