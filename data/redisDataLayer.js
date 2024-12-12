@@ -2,6 +2,18 @@
 const redisClient = require('../utils/redisClient'); // client와 connectRedis 대신 redisClient 인스턴스
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const { S3Client, DeleteObjectCommand} = require('@aws-sdk/client-s3');
+
+// AWS S3 설정
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
+const BUCKET_NAME = process.env.S3_BUCKET_NAME;
 
 // init 함수에서 connectRedis 대신 redisClient.connect() 사용
 async function init() {
@@ -261,16 +273,31 @@ async function getReactions(messageId) {
 async function createFile({ filename, originalname, mimetype, size, userId, path }) {
   await init();
   const fileId = uuidv4();
-  await redisClient.client.hSet(`file:${fileId}`, {
-    filename,
-    originalname,
-    mimetype,
-    size: String(size),
-    user: userId,
-    path,
-    uploadDate: Date.now().toString()
-  });
-  return fileId;
+  try{
+    await redisClient.client.hSet(`file:${fileId}`, {
+      filename,
+      originalname,
+      mimetype,
+      size: String(size),
+      user: userId,
+      path,
+      uploadDate: Date.now().toString()
+    });
+    return fileId;
+  } catch(error){
+    console.error(`파일 정보 저장 실패: ${fileId}`, error);
+    // S3에 업로드된 파일을 삭제하여 데이터 일관성을 유지
+    try {
+      await s3.send(new DeleteObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: filename,
+      }));
+      console.log(`S3 파일 롤백 성공: ${filename}`);
+    } catch (rollbackError) {
+      console.error(`S3 파일 롤백 실패: ${filename}`, rollbackError);
+    }
+  }
+
 }
 
 async function getFile(fileId) {
@@ -291,6 +318,23 @@ async function getFile(fileId) {
 
 async function deleteFile(fileId) {
   await init();
+  const file = await getFile(fileId);
+  if (!file) return;
+
+  // S3에서 파일 삭제
+  const deleteParams = {
+    Bucket: BUCKET_NAME,
+    Key: file.filename,
+  };
+  try {
+    await s3.send(new DeleteObjectCommand(deleteParams));
+    console.log(`S3 파일 삭제 성공: ${file.filename}`);
+  } catch (error) {
+    console.error(`S3 파일 삭제 실패: ${file.filename}`, error);
+    throw new Error('S3 파일 삭제 실패'); // 실패 시 종료
+  }
+
+  // Redis에서 파일 정보 삭제
   await redisClient.client.del(`file:${fileId}`);
 }
 
