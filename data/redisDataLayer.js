@@ -1,303 +1,333 @@
 // data/redisDataLayer.js
-const redisClient = require('../utils/redisClient'); // client와 connectRedis 대신 redisClient 인스턴스
+const redisClient = require('../utils/redisClient');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 
-// init 함수에서 connectRedis 대신 redisClient.connect() 사용
-async function init() {
-  await redisClient.connect();
-}
-
 // User 관련
 async function createUser({ name, email, passwordHash, encryptedEmail, profileImage = '' }) {
-  await init();
-  const userId = uuidv4();
-  await redisClient.client.hSet(`user:${userId}`, {
-    name, 
-    email, 
-    encryptedEmail: encryptedEmail || '',
-    passwordHash,
-    profileImage,
-    createdAt: Date.now().toString(),
-    lastActive: Date.now().toString()
-  });
+    const userId = uuidv4();
+    const userData = {
+        name,
+        email,
+        encryptedEmail: encryptedEmail || '',
+        passwordHash,
+        profileImage,
+        createdAt: Date.now().toString(),
+        lastActive: Date.now().toString()
+    };
 
-  // email -> userId 매핑
-  await redisClient.client.set(`email_to_userid:${email}`, userId);
-  return userId;
+    await redisClient.hSet(`user:${userId}`, userData);
+    await redisClient.set(`email_to_userid:${email}`, userId);
+    return userId;
 }
 
 async function getUserById(userId) {
-  await init();
-  const user = await redisClient.client.hGetAll(`user:${userId}`);
-  if (!user || Object.keys(user).length === 0) return null;
-  return {
-    id: userId,
-    name: user.name,
-    email: user.email,
-    encryptedEmail: user.encryptedEmail,
-    passwordHash: user.passwordHash,
-    profileImage: user.profileImage,
-    createdAt: new Date(parseInt(user.createdAt, 10)),
-    lastActive: new Date(parseInt(user.lastActive, 10))
-  };
+    const user = await redisClient.hGetAll(`user:${userId}`);
+    if (!user || Object.keys(user).length === 0) return null;
+    
+    return {
+        id: userId,
+        name: user.name,
+        email: user.email,
+        encryptedEmail: user.encryptedEmail,
+        passwordHash: user.passwordHash,
+        profileImage: user.profileImage,
+        createdAt: new Date(parseInt(user.createdAt, 10)),
+        lastActive: new Date(parseInt(user.lastActive, 10))
+    };
 }
 
 async function findUserByEmail(email) {
-  await init();
-  const userId = await redisClient.client.get(`email_to_userid:${email}`);
-  if (!userId) return null;
-  return getUserById(userId);
+    const userId = await redisClient.get(`email_to_userid:${email}`);
+    if (!userId) return null;
+    return getUserById(userId);
 }
 
 async function updateUser(userId, updates) {
-  await init();
-  const fields = {};
-  for (const key in updates) {
-    fields[key] = typeof updates[key] === 'string' ? updates[key] : String(updates[key]);
-  }
-  await redisClient.client.hSet(`user:${userId}`, fields);
+    const fields = Object.entries(updates).reduce((acc, [key, value]) => {
+        acc[key] = typeof value === 'string' ? value : String(value);
+        return acc;
+    }, {});
+    
+    await redisClient.hSet(`user:${userId}`, fields);
 }
 
 async function updateUserLastActive(userId) {
-  await updateUser(userId, { lastActive: Date.now().toString() });
+    await updateUser(userId, { lastActive: Date.now().toString() });
 }
 
 async function deleteUser(userId) {
-  await init();
-  const user = await getUserById(userId);
-  if (!user) return;
-  // email -> userId 매핑 제거
-  await redisClient.client.del(`email_to_userid:${user.email}`);
-  await redisClient.client.del(`user:${userId}`);
+    const user = await getUserById(userId);
+    if (!user) return;
+    
+    await Promise.all([
+        redisClient.del(`email_to_userid:${user.email}`),
+        redisClient.del(`user:${userId}`)
+    ]);
 }
 
 // Room 관련
 async function createRoom(name, creatorUserId, password = null) {
-    await init();
     const roomId = uuidv4();
     const hasPassword = !!password;
     const roomData = {
-      name,
-      creator: creatorUserId,
-      hasPassword: hasPassword ? '1' : '0',
-      createdAt: Date.now().toString()
+        name,
+        creator: creatorUserId,
+        hasPassword: hasPassword ? '1' : '0',
+        createdAt: Date.now().toString()
     };
-  
+
     if (hasPassword) {
-      const salt = await bcrypt.genSalt(10);
-      const hashed = await bcrypt.hash(password, salt);
-      roomData.password = hashed;
+        const salt = await bcrypt.genSalt(10);
+        roomData.password = await bcrypt.hash(password, salt);
     }
-  
-    await redisClient.client.hSet(`room:${roomId}`, roomData);
-    await redisClient.client.sAdd(`room:${roomId}:participants`, creatorUserId);
-  
-    // 모든 방 ID를 관리하는 set에 추가
-    await redisClient.client.sAdd('room:all', roomId);
-  
+
+    await Promise.all([
+        redisClient.hSet(`room:${roomId}`, roomData),
+        redisClient.sAdd(`room:${roomId}:participants`, creatorUserId), // 단일 값 추가
+        redisClient.sAdd('room:all', roomId) // 단일 값 추가
+    ]);
+
     return roomId;
 }
 
 async function getAllRoomIds() {
-    await init();
-    return redisClient.client.sMembers('room:all');
+    return redisClient.sMembers('room:all');
 }
 
 async function getRoomById(roomId) {
-  await init();
-  const room = await redisClient.client.hGetAll(`room:${roomId}`);
-  if (!room || Object.keys(room).length === 0) return null;
-  const participants = await redisClient.client.sMembers(`room:${roomId}:participants`);
-  return {
-    id: roomId,
-    name: room.name,
-    creator: room.creator,
-    hasPassword: room.hasPassword === '1',
-    createdAt: new Date(parseInt(room.createdAt, 10)),
-    participants
-  };
+    const [room, participants] = await Promise.all([
+        redisClient.hGetAll(`room:${roomId}`),
+        redisClient.sMembers(`room:${roomId}:participants`) // sMembers 사용
+    ]);
+
+    if (!room || Object.keys(room).length === 0) return null;
+    
+    return {
+        id: roomId,
+        name: room.name,
+        creator: room.creator,
+        hasPassword: room.hasPassword === '1',
+        createdAt: new Date(parseInt(room.createdAt, 10)),
+        participants: participants || []
+    };
 }
 
 async function addParticipant(roomId, userId) {
-  await init();
-  await redisClient.client.sAdd(`room:${roomId}:participants`, userId);
+    return redisClient.sAdd(`room:${roomId}:participants`, userId);
 }
 
 async function removeParticipant(roomId, userId) {
-  await init();
-  await redisClient.client.sRem(`room:${roomId}:participants`, userId);
+    return redisClient.sRem(`room:${roomId}:participants`, userId);
 }
 
 async function checkRoomPassword(roomId, password) {
-  await init();
-  const hashed = await redisClient.client.hGet(`room:${roomId}`, 'password');
-  if (!hashed) return true; // no password
-  return bcrypt.compare(password, hashed);
+    const hashed = await redisClient.hGet(`room:${roomId}`, 'password');
+    if (!hashed) return true;
+    return bcrypt.compare(password, hashed);
 }
 
-// Message 관련
 async function createMessage(roomId, { type, content, sender, fileId, aiType }) {
-  await init();
-  const messageId = uuidv4();
-  const timestamp = Date.now();
-  console.log(roomId, type, content, sender, fileId, aiType);
-  const msgData = {
-    room: roomId,
-    type: type,
-    content: content || '',
-    sender: sender || '',
-    timestamp: timestamp.toString(),
-    isDeleted: '0'
-  };
+    try {
+        const messageId = uuidv4();
+        const timestamp = Date.now();
+        
+        const msgData = {
+            room: roomId,
+            type,
+            content: content || '',
+            sender: sender || '',
+            timestamp: timestamp.toString(),
+            isDeleted: '0',
+            ...(type === 'file' && fileId ? { file: fileId } : {}),
+            ...(type === 'ai' && aiType ? { aiType } : {})
+        };
 
-  if (type === 'file' && fileId) {
-    msgData.file = fileId;
-  }
+        const messagesKey = `room:${roomId}:messages`;
+        const keyType = await redisClient.cluster.type(messagesKey);
+        if (keyType !== 'zset' && keyType !== 'none') {
+            await redisClient.del(messagesKey);
+        }
 
-  if (type === 'ai' && aiType) {
-    msgData.aiType = aiType;
-  }
+        await Promise.all([
+            redisClient.hSet(`message:${messageId}`, msgData),
+            redisClient.cluster.zadd(messagesKey, timestamp, messageId)  // 수정된 부분
+        ]);
 
-  await redisClient.client.hSet(`message:${messageId}`, msgData);
-  await redisClient.client.zAdd(`room:${roomId}:messages`, {
-    score: timestamp,
-    value: messageId
-  });
-
-  return messageId;
-}
-
-async function getMessage(messageId) {
-  await init();
-  const m = await redisClient.client.hGetAll(`message:${messageId}`);
-  if (!m || Object.keys(m).length === 0) return null;
-
-  return {
-    _id: messageId,
-    room: m.room,
-    type: m.type,
-    content: m.content,
-    sender: m.sender,
-    file: m.file || null,
-    aiType: m.aiType || null,
-    timestamp: new Date(parseInt(m.timestamp, 10)),
-    isDeleted: m.isDeleted === '1'
-  };
+        return messageId;
+    } catch (error) {
+        console.error('Create message error:', error, {
+            roomId,
+            type,
+            sender
+        });
+        throw error;
+    }
 }
 
 async function getMessagesForRoom(roomId, beforeTimestamp = null, limit = 30) {
-  await init();
-  const maxScore = beforeTimestamp ? (beforeTimestamp - 1) : '+inf';
-  const messageIds = await redisClient.client.zRangeByScore(`room:${roomId}:messages`, '-inf', maxScore, {
-    REV: true,
-    LIMIT: { offset: 0, count: limit + 1 }
-  });
+    try {
+        const messagesKey = `room:${roomId}:messages`;
+        const keyType = await redisClient.cluster.type(messagesKey);
+        
+        // 기존 데이터가 잘못된 타입이면 초기화
+        if (keyType !== 'zset' && keyType !== 'none') {
+            await redisClient.del(messagesKey);
+            return {
+                messages: [],
+                hasMore: false,
+                oldestTimestamp: null
+            };
+        }
 
-  const hasMore = messageIds.length > limit;
-  const resultIds = messageIds.slice(0, limit);
+        const maxScore = beforeTimestamp || '+inf';
+        const messageIds = await redisClient.cluster.zrevrangebyscore(
+            messagesKey,
+            maxScore,
+            '-inf',
+            'LIMIT', 0, limit + 1
+        );
 
-  const messages = [];
-  for (const mid of resultIds) {
-    const msg = await getMessage(mid);
-    if (msg) messages.push(msg);
-  }
+        if (!messageIds || messageIds.length === 0) {
+            return {
+                messages: [],
+                hasMore: false,
+                oldestTimestamp: null
+            };
+        }
 
-  messages.sort((a,b) => a.timestamp - b.timestamp);
-  return { messages, hasMore, oldestTimestamp: messages[0]?.timestamp.getTime() || null };
+        const hasMore = messageIds.length > limit;
+        const resultIds = messageIds.slice(0, limit);
+
+        const messagePromises = resultIds.map(id => getMessage(id));
+        const messages = await Promise.all(messagePromises);
+        const validMessages = messages.filter(Boolean);
+        
+        validMessages.sort((a, b) => a.timestamp - b.timestamp);
+        
+        return {
+            messages: validMessages,
+            hasMore,
+            oldestTimestamp: validMessages[0]?.timestamp.getTime() || null
+        };
+    } catch (error) {
+        console.error('Get messages error:', error, {
+            roomId,
+            beforeTimestamp,
+            limit
+        });
+        return {
+            messages: [],
+            hasMore: false,
+            oldestTimestamp: null
+        };
+    }
+}
+
+async function getMessage(messageId) {
+    try {
+        const message = await redisClient.hGetAll(`message:${messageId}`);
+        if (!message || Object.keys(message).length === 0) return null;
+
+        return {
+            _id: messageId,
+            room: message.room,
+            type: message.type,
+            content: message.content,
+            sender: message.sender,
+            file: message.file || null,
+            aiType: message.aiType || null,
+            timestamp: new Date(parseInt(message.timestamp, 10)),
+            isDeleted: message.isDeleted === '1'
+        };
+    } catch (error) {
+        console.error('Get message error:', error, { messageId });
+        return null;
+    }
 }
 
 async function updateMessage(messageId, fields) {
-  await init();
-  const updateData = {};
-  for (const k in fields) {
-    updateData[k] = String(fields[k]);
-  }
-  await redisClient.client.hSet(`message:${messageId}`, updateData);
+    const updateData = Object.entries(fields).reduce((acc, [key, value]) => {
+        acc[key] = String(value);
+        return acc;
+    }, {});
+    
+    await redisClient.hSet(`message:${messageId}`, updateData);
 }
 
 async function markMessagesAsRead(userId, roomId, messageIds) {
-  await init();
-  for (const mid of messageIds) {
-    const readersKey = `message:${mid}:readers`;
-    const isMember = await redisClient.client.sIsMember(readersKey, userId);
-    if (!isMember) {
-      await redisClient.client.sAdd(readersKey, userId);
+    for (const messageId of messageIds) {
+        const readers = await redisClient.get(`message:${messageId}:readers`) || [];
+        if (!readers.includes(userId)) {
+            readers.push(userId);
+            await redisClient.set(`message:${messageId}:readers`, readers);
+        }
     }
-  }
 }
 
 async function addReaction(messageId, emoji, userId) {
-  await init();
-  const key = `message:${messageId}:reactions:${emoji}`;
-  await redisClient.client.sAdd(key, userId);
+    const reactions = await redisClient.get(`message:${messageId}:reactions`) || {};
+    if (!reactions[emoji]) reactions[emoji] = [];
+    if (!reactions[emoji].includes(userId)) {
+        reactions[emoji].push(userId);
+        await redisClient.set(`message:${messageId}:reactions`, reactions);
+    }
 }
 
 async function removeReaction(messageId, emoji, userId) {
-  await init();
-  const key = `message:${messageId}:reactions:${emoji}`;
-  await redisClient.client.sRem(key, userId);
+    const reactions = await redisClient.get(`message:${messageId}:reactions`) || {};
+    if (reactions[emoji]) {
+        reactions[emoji] = reactions[emoji].filter(id => id !== userId);
+        if (reactions[emoji].length === 0) delete reactions[emoji];
+        await redisClient.set(`message:${messageId}:reactions`, reactions);
+    }
 }
 
 async function getReactions(messageId) {
-  await init();
-  const reactions = {};
-  const pattern = `message:${messageId}:reactions:*`;
-  let cursor = '0';
-  do {
-    const reply = await redisClient.client.scan(cursor, { MATCH: pattern, COUNT: 100 });
-    cursor = reply.cursor;
-    for (const key of reply.keys) {
-      const emoji = key.split(':').pop();
-      const users = await redisClient.client.sMembers(key);
-      reactions[emoji] = users;
-    }
-  } while (cursor !== '0');
-
-  return reactions;
+    return await redisClient.get(`message:${messageId}:reactions`) || {};
 }
 
 // File 관련
 async function createFile({ filename, originalname, mimetype, size, userId, path }) {
-  await init();
-  const fileId = uuidv4();
-  await redisClient.client.hSet(`file:${fileId}`, {
-    filename,
-    originalname,
-    mimetype,
-    size: String(size),
-    user: userId,
-    path,
-    uploadDate: Date.now().toString()
-  });
-  return fileId;
+    const fileId = uuidv4();
+    const fileData = {
+        filename,
+        originalname,
+        mimetype,
+        size: String(size),
+        user: userId,
+        path,
+        uploadDate: Date.now().toString()
+    };
+
+    await redisClient.hSet(`file:${fileId}`, fileData);
+    return fileId;
 }
 
 async function getFile(fileId) {
-  await init();
-  const f = await redisClient.client.hGetAll(`file:${fileId}`);
-  if (!f || Object.keys(f).length === 0) return null;
-  return {
-    _id: fileId,
-    filename: f.filename,
-    originalname: f.originalname,
-    mimetype: f.mimetype,
-    size: parseInt(f.size, 10),
-    user: f.user,
-    path: f.path,
-    uploadDate: new Date(parseInt(f.uploadDate, 10))
-  };
+    const file = await redisClient.hGetAll(`file:${fileId}`);
+    if (!file || Object.keys(file).length === 0) return null;
+
+    return {
+        _id: fileId,
+        filename: file.filename,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: parseInt(file.size, 10),
+        user: file.user,
+        path: file.path,
+        uploadDate: new Date(parseInt(file.uploadDate, 10))
+    };
 }
 
 async function deleteFile(fileId) {
-  await init();
-  await redisClient.client.del(`file:${fileId}`);
+    await redisClient.del(`file:${fileId}`);
 }
 
 module.exports = {
-  createUser, getUserById, findUserByEmail, updateUser, updateUserLastActive, deleteUser,
-  createRoom, getRoomById, addParticipant, removeParticipant, checkRoomPassword,
-  createMessage, getMessage, getMessagesForRoom, updateMessage, markMessagesAsRead,
-  addReaction, removeReaction, getReactions, getAllRoomIds,
-  createFile, getFile, deleteFile
+    createUser, getUserById, findUserByEmail, updateUser, updateUserLastActive, deleteUser,
+    createRoom, getRoomById, addParticipant, removeParticipant, checkRoomPassword,
+    createMessage, getMessage, getMessagesForRoom, updateMessage, markMessagesAsRead,
+    addReaction, removeReaction, getReactions, getAllRoomIds,
+    createFile, getFile, deleteFile
 };

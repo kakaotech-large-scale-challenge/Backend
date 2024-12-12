@@ -1,161 +1,168 @@
-// backend/utils/redisClient.js
-const { createClient } = require('redis');
-const { redisHost, redisPort } = require('../config/keys');
+// utils/redisClient.js
+const Redis = require('ioredis');  // ioredis로 변경
 
 class RedisClient {
   constructor() {
-    this.client = null;
+    this.cluster = null;
     this.isConnected = false;
-    this.connectionAttempts = 0;
-    this.maxRetries = 5;
-    this.retryDelay = 5000;
+    this.init();
   }
 
-  async connect() {
-    if (this.isConnected && this.client) {
-      return this.client;
-    }
-
+  init() {
     try {
-      console.log('Connecting to Redis...');
-
-      this.client = createClient({
-        url: `redis://${redisHost}:${redisPort}`
+      this.cluster = new Redis.Cluster([
+        {
+          host: process.env.REDIS_MASTER1,
+          port: 6379
+        },
+        {
+          host: process.env.REDIS_MASTER2,
+          port: 6379
+        },
+        {
+          host: process.env.REDIS_MASTER3,
+          port: 6379
+        }
+      ], {
+        redisOptions: {
+          connectTimeout: 10000,
+          maxRetriesPerRequest: 3
+        },
+        clusterRetryStrategy: (times) => {
+          if (times > 3) return null;
+          return Math.min(times * 1000, 3000);
+        },
+        enableReadyCheck: true,
+        scaleReads: 'slave',
+        maxRedirections: 3,
+        retryDelayOnFailover: 1000
       });
 
-      this.client.on('connect', () => {
-        console.log('Redis Client Connected');
+      this.cluster.on('connect', () => {
+        console.log('Redis Cluster Connected');
         this.isConnected = true;
-        this.connectionAttempts = 0;
       });
 
-      this.client.on('error', (err) => {
-        console.error('Redis Client Error:', err);
+      this.cluster.on('error', (err) => {
+        console.error('Redis Cluster Error:', err);
         this.isConnected = false;
       });
 
-      await this.client.connect();
-      return this.client;
+      this.cluster.on('node:error', (err) => {
+        console.error('Redis Cluster Node Error:', err);
+      });
 
     } catch (error) {
-      console.error('Redis connection error:', error);
-      this.isConnected = false;
-      this.retryConnection();
-      throw error;
-    }
-  }
-
-  retryConnection() {
-    if (this.connectionAttempts < this.maxRetries) {
-      this.connectionAttempts++;
-      console.log(`Retrying Redis connection in ${this.retryDelay}ms... Attempt ${this.connectionAttempts}/${this.maxRetries}`);
-      setTimeout(() => this.connect().catch(() => {}), this.retryDelay);
-    } else {
-      console.error('Max Redis connection attempts reached. Could not connect to Redis.');
-    }
-  }
-
-  async set(key, value, options = {}) {
-    try {
-      if (!this.isConnected) {
-        await this.connect();
-      }
-
-      let stringValue;
-      if (typeof value === 'object') {
-        stringValue = JSON.stringify(value);
-      } else {
-        stringValue = String(value);
-      }
-
-      if (options.ttl) {
-        return await this.client.setEx(key, options.ttl, stringValue);
-      }
-      return await this.client.set(key, stringValue);
-    } catch (error) {
-      console.error('Redis set error:', error);
+      console.error('Redis Cluster Initialization Error:', error);
       throw error;
     }
   }
 
   async get(key) {
     try {
-      if (!this.isConnected) {
-        await this.connect();
-      }
-
-      const value = await this.client.get(key);
-      if (!value) return null;
-
+      const result = await this.cluster.get(key);
+      if (!result) return null;
       try {
-        return JSON.parse(value);
-      } catch (parseError) {
-        return value;  // 일반 문자열인 경우 그대로 반환
+        return JSON.parse(result);
+      } catch {
+        return result;
       }
     } catch (error) {
       console.error('Redis get error:', error);
-      throw error;
+      return null;
     }
   }
 
-  async setEx(key, seconds, value) {
+  async set(key, value, options = {}) {
     try {
-      if (!this.isConnected) {
-        await this.connect();
+      const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      if (options.ttl) {
+        return await this.cluster.setex(key, options.ttl, stringValue);
       }
-
-      let stringValue;
-      if (typeof value === 'object') {
-        stringValue = JSON.stringify(value);
-      } else {
-        stringValue = String(value);
-      }
-
-      return await this.client.setEx(key, seconds, stringValue);
+      return await this.cluster.set(key, stringValue);
     } catch (error) {
-      console.error('Redis setEx error:', error);
-      throw error;
+      console.error('Redis set error:', error);
+      return false;
     }
   }
 
   async del(key) {
     try {
-      if (!this.isConnected) {
-        await this.connect();
-      }
-      return await this.client.del(key);
+      return await this.cluster.del(key);
     } catch (error) {
       console.error('Redis del error:', error);
-      throw error;
+      return false;
+    }
+  }
+
+  async hSet(key, value) {
+    try {
+      const hash = typeof value === 'object' ? 
+        Object.entries(value).reduce((acc, [k, v]) => {
+          acc[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
+          return acc;
+        }, {}) : 
+        value;
+      return await this.cluster.hset(key, hash);
+    } catch (error) {
+      console.error('Redis hSet error:', error);
+      return false;
+    }
+  }
+
+  async hGet(key, field) {
+    try {
+      return await this.cluster.hget(key, field);
+    } catch (error) {
+      console.error('Redis hGet error:', error);
+      return null;
+    }
+  }
+
+  async hGetAll(key) {
+    try {
+      return await this.cluster.hgetall(key);
+    } catch (error) {
+      console.error('Redis hGetAll error:', error);
+      return null;
+    }
+  }
+
+  async sAdd(key, member) {
+    try {
+      return await this.cluster.sadd(key, member);
+    } catch (error) {
+      console.error('Redis sAdd error:', error);
+      return false;
+    }
+  }
+
+  async sMembers(key) {
+    try {
+      return await this.cluster.smembers(key);
+    } catch (error) {
+      console.error('Redis sMembers error:', error);
+      return [];
+    }
+  }
+
+  async sRem(key, member) {
+    try {
+      return await this.cluster.srem(key, member);
+    } catch (error) {
+      console.error('Redis sRem error:', error);
+      return false;
     }
   }
 
   async expire(key, seconds) {
     try {
-      if (!this.isConnected) {
-        await this.connect();
-      }
-      return await this.client.expire(key, seconds);
+      return await this.cluster.expire(key, seconds);
     } catch (error) {
       console.error('Redis expire error:', error);
-      throw error;
-    }
-  }
-
-  async quit() {
-    if (this.client) {
-      try {
-        await this.client.quit();
-        this.isConnected = false;
-        this.client = null;
-        console.log('Redis connection closed successfully');
-      } catch (error) {
-        console.error('Redis quit error:', error);
-        throw error;
-      }
+      return false;
     }
   }
 }
 
-const redisClient = new RedisClient();
-module.exports = redisClient;
+module.exports = new RedisClient();
