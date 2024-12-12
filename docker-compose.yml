@@ -41,6 +41,34 @@ services:
       redis-cluster-3:
         ipv4_address: process.env.REDIS_MASTER3
 
+  redis-master4:
+    container_name: redis-master4
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-master4.conf:/usr/local/etc/redis/redis.conf
+      - redis-master4-data:/data
+    ports:
+      - "6382:6379"
+      - "16382:16379"
+    networks:
+      redis-cluster-13:
+          ipv4_address: process.env.REDIS_MASTER4
+
+  redis-master5:
+    container_name: redis-master5
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-master5.conf:/usr/local/etc/redis/redis.conf
+      - redis-master5-data:/data
+    ports:
+      - "6383:6379"
+      - "16383:16379"
+    networks:
+      redis-cluster-3:
+        ipv4_address: process.env.REDIS_MASTER5
+
   redis-replica1:
     container_name: redis-replica1
     image: redis:7.2
@@ -83,6 +111,34 @@ services:
       redis-cluster-43:
         ipv4_address: process.env.REDIS_REPLICA3
 
+  redis-replica4:
+    container_name: redis-replica4
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-replica4.conf:/usr/local/etc/redis/redis.conf
+      - redis-replica4-data:/data
+    ports:
+      - "6387:6379"
+      - "16387:16379"
+    networks:
+      redis-cluster-52:
+        ipv4_address: process.env.REDIS_REPLICA4
+
+  redis-replica5:
+    container_name: redis-replica5
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-replica5.conf:/usr/local/etc/redis/redis.conf
+      - redis-replica5-data:/data
+    ports:
+      - "6388:6379"
+      - "16388:16379"
+    networks:
+      redis-cluster-43:
+        ipv4_address: process.env.REDIS_REPLICA5
+
 networks:
   redis-cluster-43:
     external: true
@@ -90,11 +146,17 @@ networks:
     external: true
   redis-cluster-3:
     external: true
+  redis-cluster-13:
+    external: true
 
 volumes:
   redis-master1-data:
   redis-master2-data:
   redis-master3-data:
+  redis-master4-data:
+  redis-master5-data:
   redis-replica1-data:
   redis-replica2-data:
   redis-replica3-data:
+  redis-replica4-data:
+  redis-replica5-data:
