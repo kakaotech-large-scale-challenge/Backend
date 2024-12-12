@@ -1,4 +1,3 @@
-// services/sessionService.js
 const redisClient = require('../utils/redisClient');
 const crypto = require('crypto');
 
@@ -9,9 +8,34 @@ class SessionService {
   static USER_SESSIONS_PREFIX = 'user_sessions:';
   static ACTIVE_SESSION_PREFIX = 'active_session:';
 
+  // 데이터 직렬화 헬퍼 메서드
+  static _serialize(data) {
+    if (typeof data === 'object') {
+      return JSON.stringify(data);
+    }
+    return String(data);
+  }
+
+  // 데이터 역직렬화 헬퍼 메서드
+  static _deserialize(data) {
+    try {
+      // 이미 객체인 경우 처리
+      if (typeof data === 'object') {
+        return data;
+      }
+      return JSON.parse(data);
+    } catch (error) {
+      // JSON 파싱 실패 시 원본 반환
+      return data;
+    }
+  }
+
   static async createSession(userId, metadata = {}) {
     try {
-      // 기존 세션들 모두 제거
+      if (!userId) {
+        throw new Error('userId is required');
+      }
+
       await this.removeAllUserSessions(userId);
 
       const sessionId = this.generateSessionId();
@@ -28,11 +52,13 @@ class SessionService {
         }
       };
 
+      const serializedData = this._serialize(sessionData);
+
       await Promise.all([
-        redisClient.set(this.getSessionKey(userId), sessionData, { ttl: this.SESSION_TTL }),
-        redisClient.set(this.getSessionIdKey(sessionId), userId.toString(), { ttl: this.SESSION_TTL }),
-        redisClient.set(this.getActiveSessionKey(userId), sessionId, { ttl: this.SESSION_TTL }),
-        redisClient.set(this.getUserSessionsKey(userId), sessionId, { ttl: this.SESSION_TTL })
+        redisClient.set(this.getSessionKey(userId), serializedData, 'EX', this.SESSION_TTL),
+        redisClient.set(this.getSessionIdKey(sessionId), String(userId), 'EX', this.SESSION_TTL),
+        redisClient.set(this.getActiveSessionKey(userId), sessionId, 'EX', this.SESSION_TTL),
+        redisClient.set(this.getUserSessionsKey(userId), sessionId, 'EX', this.SESSION_TTL)
       ]);
 
       return {
@@ -50,22 +76,21 @@ class SessionService {
   static async getActiveSession(userId) {
     try {
       if (!userId) {
-        console.error('getActiveSession: userId is required');
+        throw new Error('userId is required');
+      }
+
+      const [sessionId, sessionDataStr] = await Promise.all([
+        redisClient.get(this.getActiveSessionKey(userId)),
+        redisClient.get(this.getSessionKey(userId))
+      ]);
+
+      if (!sessionId || !sessionDataStr) {
         return null;
       }
 
-      const activeSessionKey = this.getActiveSessionKey(userId);
-      const sessionId = await redisClient.get(activeSessionKey);
-
-      if (!sessionId) {
-        return null;
-      }
-
-      const sessionKey = this.getSessionKey(userId);
-      const sessionData = await redisClient.get(sessionKey);
-
-      if (!sessionData) {
-        await redisClient.del(activeSessionKey);
+      const sessionData = this._deserialize(sessionDataStr);
+      if (!sessionData || typeof sessionData !== 'object') {
+        console.error('Invalid session data format:', sessionDataStr);
         return null;
       }
 
@@ -83,56 +108,39 @@ class SessionService {
   static async validateSession(userId, sessionId) {
     try {
       if (!userId || !sessionId) {
-        return {
-          isValid: false,
-          error: 'INVALID_PARAMETERS',
-          message: '유효하지 않은 세션 파라미터'
-        };
+        return this._createErrorResponse('INVALID_PARAMETERS', '유효하지 않은 세션 파라미터');
       }
 
-      const activeSessionKey = this.getActiveSessionKey(userId);
-      const activeSessionId = await redisClient.get(activeSessionKey);
+      const [activeSessionId, sessionDataStr] = await Promise.all([
+        redisClient.get(this.getActiveSessionKey(userId)),
+        redisClient.get(this.getSessionKey(userId))
+      ]);
 
       if (!activeSessionId || activeSessionId !== sessionId) {
-        console.log('Session validation failed:', {
-          userId,
-          sessionId,
-          activeSessionId
-        });
-
         await this.removeAllUserSessions(userId);
-
-        return {
-          isValid: false,
-          error: 'INVALID_SESSION',
-          message: '다른 기기에서 로그인되어 현재 세션이 만료되었습니다.'
-        };
+        return this._createErrorResponse('INVALID_SESSION', '다른 기기에서 로그인되어 현재 세션이 만료되었습니다.');
       }
 
-      const sessionData = await redisClient.get(this.getSessionKey(userId));
-      if (!sessionData) {
-        return {
-          isValid: false,
-          error: 'SESSION_NOT_FOUND',
-          message: '세션을 찾을 수 없습니다.'
-        };
+      const sessionData = this._deserialize(sessionDataStr);
+      if (!sessionData || typeof sessionData !== 'object') {
+        console.error('Invalid session data format:', sessionDataStr);
+        await this.removeAllUserSessions(userId);
+        return this._createErrorResponse('INVALID_SESSION_DATA', '세션 데이터가 손상되었습니다.');
       }
 
       if (Date.now() - sessionData.lastActivity > this.SESSION_TTL * 1000) {
         await this.removeAllUserSessions(userId);
-        return {
-          isValid: false,
-          error: 'SESSION_EXPIRED',
-          message: '세션이 만료되었습니다.'
-        };
+        return this._createErrorResponse('SESSION_EXPIRED', '세션이 만료되었습니다.');
       }
 
       sessionData.lastActivity = Date.now();
+      const serializedData = this._serialize(sessionData);
+      
       await Promise.all([
-        redisClient.set(this.getSessionKey(userId), sessionData, { ttl: this.SESSION_TTL }),
-        redisClient.set(activeSessionKey, sessionId, { ttl: this.SESSION_TTL }),
-        redisClient.set(this.getUserSessionsKey(userId), sessionId, { ttl: this.SESSION_TTL }),
-        redisClient.set(this.getSessionIdKey(sessionId), userId.toString(), { ttl: this.SESSION_TTL })
+        redisClient.set(this.getSessionKey(userId), serializedData, 'EX', this.SESSION_TTL),
+        redisClient.set(this.getActiveSessionKey(userId), sessionId, 'EX', this.SESSION_TTL),
+        redisClient.set(this.getUserSessionsKey(userId), sessionId, 'EX', this.SESSION_TTL),
+        redisClient.set(this.getSessionIdKey(sessionId), String(userId), 'EX', this.SESSION_TTL)
       ]);
 
       return {
@@ -142,25 +150,18 @@ class SessionService {
 
     } catch (error) {
       console.error('Session validation error:', error);
-      return {
-        isValid: false,
-        error: 'VALIDATION_ERROR',
-        message: '세션 검증 중 오류가 발생했습니다.'
-      };
+      return this._createErrorResponse('VALIDATION_ERROR', '세션 검증 중 오류가 발생했습니다.');
     }
   }
 
   static async removeAllUserSessions(userId) {
     try {
-      const userSessionsKey = this.getUserSessionsKey(userId);
-      const activeSessionKey = this.getActiveSessionKey(userId);
-      const sessionKey = this.getSessionKey(userId);
-      const oldSessionId = await redisClient.get(userSessionsKey);
-
+      const oldSessionId = await redisClient.get(this.getUserSessionsKey(userId));
+      
       const deletePromises = [
-        redisClient.del(sessionKey),
-        redisClient.del(userSessionsKey),
-        redisClient.del(activeSessionKey)
+        redisClient.del(this.getSessionKey(userId)),
+        redisClient.del(this.getUserSessionsKey(userId)),
+        redisClient.del(this.getActiveSessionKey(userId))
       ];
 
       if (oldSessionId) {
@@ -177,39 +178,33 @@ class SessionService {
 
   static async updateLastActivity(userId) {
     try {
-      if (!userId) {
-        console.error('updateLastActivity: userId is required');
-        return false;
-      }
-
       const sessionKey = this.getSessionKey(userId);
-      const sessionData = await redisClient.get(sessionKey);
+      const sessionDataStr = await redisClient.get(sessionKey);
 
-      if (!sessionData) {
-        console.error('updateLastActivity: No session found for user', userId);
+      if (!sessionDataStr) {
         return false;
       }
 
-      // 세션 데이터 갱신
+      const sessionData = this._deserialize(sessionDataStr);
+      if (!sessionData || typeof sessionData !== 'object') {
+        return false;
+      }
+
       sessionData.lastActivity = Date.now();
-
-      // Promise.all을 사용하여 모든 관련 키의 TTL 갱신
-      const activeSessionKey = this.getActiveSessionKey(userId);
-      const userSessionsKey = this.getUserSessionsKey(userId);
-
-      await Promise.all([
-        redisClient.set(sessionKey, sessionData, { ttl: this.SESSION_TTL }),
-        redisClient.set(activeSessionKey, sessionData.sessionId, { ttl: this.SESSION_TTL }),
-        redisClient.set(userSessionsKey, sessionData.sessionId, { ttl: this.SESSION_TTL }),
-        redisClient.set(this.getSessionIdKey(sessionData.sessionId), userId.toString(), { ttl: this.SESSION_TTL })
-      ]);
-
+      await redisClient.set(sessionKey, this._serialize(sessionData), 'EX', this.SESSION_TTL);
       return true;
-
     } catch (error) {
       console.error('Update last activity error:', error);
       return false;
     }
+  }
+
+  static _createErrorResponse(error, message) {
+    return {
+      isValid: false,
+      error,
+      message
+    };
   }
 
   static generateSessionId() {
@@ -231,39 +226,6 @@ class SessionService {
   static getActiveSessionKey(userId) {
     return `${this.ACTIVE_SESSION_PREFIX}${userId}`;
   }
-  static async removeSession(userId, sessionId = null) {
-    try {
-      const userSessionsKey = this.getUserSessionsKey(userId);
-      const activeSessionKey = this.getActiveSessionKey(userId);
-
-      if (sessionId) {
-        const currentSessionId = await redisClient.get(userSessionsKey);
-        if (currentSessionId === sessionId) {
-          await Promise.all([
-            redisClient.del(this.getSessionKey(userId)),
-            redisClient.del(this.getSessionIdKey(sessionId)),
-            redisClient.del(userSessionsKey),
-            redisClient.del(activeSessionKey)
-          ]);
-        }
-      } else {
-        const storedSessionId = await redisClient.get(userSessionsKey);
-        if (storedSessionId) {
-          await Promise.all([
-            redisClient.del(this.getSessionKey(userId)),
-            redisClient.del(this.getSessionIdKey(storedSessionId)),
-            redisClient.del(userSessionsKey),
-            redisClient.del(activeSessionKey)
-          ]);
-        }
-      }
-      return true;
-    } catch (error) {
-      console.error('Session removal error:', error);
-      return false;
-    }
-  }
 }
-
 
 module.exports = SessionService;
