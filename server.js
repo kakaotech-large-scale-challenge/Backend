@@ -94,9 +94,6 @@ app.use('/api', routes);
 app.use('/api/v1/health', healthRouter);
 
 // Socket.IO 설정
-<<<<<<< Updated upstream
-const io = socketIO(server, { cors: corsOptions });
-=======
 // const io = socketIO(server, { cors: corsOptions });
 const io = socketIO(server, {
   cors: corsOptions,
@@ -109,7 +106,6 @@ const io = socketIO(server, {
   reconnectionDelayMax: 10000,
   maxHttpBufferSize: 1e8 
 });
->>>>>>> Stashed changes
 require('./sockets/chat')(io);
 
 // Socket.IO 객체 전달
