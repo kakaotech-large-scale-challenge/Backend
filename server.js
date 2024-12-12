@@ -94,7 +94,18 @@ app.use('/api', routes);
 app.use('/api/v1/health', healthRouter);
 
 // Socket.IO 설정
-const io = socketIO(server, { cors: corsOptions });
+// const io = socketIO(server, { cors: corsOptions });
+const io = socketIO(server, {
+  cors: corsOptions,
+  pingTimeout: 60000,     // 60초
+  pingInterval: 25000,    // 25초
+  connectTimeout: 30000,  // 30초
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  maxHttpBufferSize: 1e8 
+});
 require('./sockets/chat')(io);
 
 // Socket.IO 객체 전달
