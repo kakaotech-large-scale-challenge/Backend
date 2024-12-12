@@ -198,7 +198,6 @@ const errorHandler = (error, req, res, next) => {
 module.exports = {
   upload: uploadMiddleware,
   errorHandler,
-  uploadDir,
   validateFileSize,
   ALLOWED_TYPES,
   getFileType
