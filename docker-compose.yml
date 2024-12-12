@@ -1,0 +1,100 @@
+services:
+  redis-master1:
+    container_name: redis-master1
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-master1.conf:/usr/local/etc/redis/redis.conf
+      - redis-master1-data:/data
+    ports:
+      - "6379:6379"
+      - "16379:16379"
+    networks:
+      redis-cluster-43:
+        ipv4_address: process.env.REDIS_MASTER1
+
+  redis-master2:
+    container_name: redis-master2
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-master2.conf:/usr/local/etc/redis/redis.conf
+      - redis-master2-data:/data
+    ports:
+      - "6380:6379"
+      - "16380:16379"
+    networks:
+      redis-cluster-52:
+          ipv4_address: process.env.REDIS_MASTER2
+
+  redis-master3:
+    container_name: redis-master3
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-master3.conf:/usr/local/etc/redis/redis.conf
+      - redis-master3-data:/data
+    ports:
+      - "6381:6379"
+      - "16381:16379"
+    networks:
+      redis-cluster-3:
+        ipv4_address: process.env.REDIS_MASTER3
+
+  redis-replica1:
+    container_name: redis-replica1
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-replica1.conf:/usr/local/etc/redis/redis.conf
+      - redis-replica1-data:/data
+    ports:
+      - "6384:6379"
+      - "16384:16379"
+    networks:
+      redis-cluster-43:
+        ipv4_address: process.env.REDIS_REPLICA1
+
+  redis-replica2:
+    container_name: redis-replica2
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-replica2.conf:/usr/local/etc/redis/redis.conf
+      - redis-replica2-data:/data
+    ports:
+      - "6385:6379"
+      - "16385:16379"
+    networks:
+      redis-cluster-43:
+        ipv4_address: process.env.REDIS_REPLICA2
+
+  redis-replica3:
+    container_name: redis-replica3
+    image: redis:7.2
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./config/redis-replica3.conf:/usr/local/etc/redis/redis.conf
+      - redis-replica3-data:/data
+    ports:
+      - "6386:6379"
+      - "16386:16379"
+    networks:
+      redis-cluster-43:
+        ipv4_address: process.env.REDIS_REPLICA3
+
+networks:
+  redis-cluster-43:
+    external: true
+  redis-cluster-52:
+    external: true
+  redis-cluster-3:
+    external: true
+
+volumes:
+  redis-master1-data:
+  redis-master2-data:
+  redis-master3-data:
+  redis-replica1-data:
+  redis-replica2-data:
+  redis-replica3-data:

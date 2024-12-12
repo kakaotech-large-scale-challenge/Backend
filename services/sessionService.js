@@ -1,3 +1,4 @@
+// services/sessionService.js
 const redisClient = require('../utils/redisClient');
 const crypto = require('crypto');
 
@@ -7,66 +8,6 @@ class SessionService {
   static SESSION_ID_PREFIX = 'sessionId:';
   static USER_SESSIONS_PREFIX = 'user_sessions:';
   static ACTIVE_SESSION_PREFIX = 'active_session:';
-
-  // 안전한 JSON 직렬화
-  static safeStringify(data) {
-    try {
-      if (typeof data === 'string') return data;
-      return JSON.stringify(data);
-    } catch (error) {
-      console.error('JSON stringify error:', error);
-      return '';
-    }
-  }
-
-  // 안전한 JSON 파싱
-  static safeParse(data) {
-    try {
-      if (!data) return null;
-      if (typeof data === 'object') return data;
-      if (typeof data !== 'string') return null;
-      
-      // 이미 객체인 경우 즉시 반환
-      if (data === '[object Object]') return null;
-      
-      return JSON.parse(data);
-    } catch (error) {
-      console.error('JSON parse error:', error);
-      return null;
-    }
-  }
-
-  // Redis에 데이터 저장 전 JSON 문자열로 변환
-  static async setJson(key, value, ttl) {
-    try {
-      const jsonString = this.safeStringify(value);
-      if (!jsonString) {
-        console.error('Failed to stringify value:', value);
-        return false;
-      }
-
-      if (ttl) {
-        await redisClient.setEx(key, ttl, jsonString);
-      } else {
-        await redisClient.set(key, jsonString);
-      }
-      return true;
-    } catch (error) {
-      console.error('Redis setJson error:', error);
-      return false;
-    }
-  }
-
-  // Redis에서 데이터를 가져와서 JSON으로 파싱
-  static async getJson(key) {
-    try {
-      const value = await redisClient.get(key);
-      return this.safeParse(value);
-    } catch (error) {
-      console.error('Redis getJson error:', error);
-      return null;
-    }
-  }
 
   static async createSession(userId, metadata = {}) {
     try {
@@ -87,21 +28,12 @@ class SessionService {
         }
       };
 
-      const sessionKey = this.getSessionKey(userId);
-      const sessionIdKey = this.getSessionIdKey(sessionId);
-      const userSessionsKey = this.getUserSessionsKey(userId);
-      const activeSessionKey = this.getActiveSessionKey(userId);
-
-      // 세션 데이터 저장
-      const saved = await this.setJson(sessionKey, sessionData, this.SESSION_TTL);
-      if (!saved) {
-        throw new Error('세션 데이터 저장에 실패했습니다.');
-      }
-
-      // 세션 ID 매핑 저장 - 문자열 값은 직접 저장
-      await redisClient.setEx(sessionIdKey, this.SESSION_TTL, userId.toString());
-      await redisClient.setEx(userSessionsKey, this.SESSION_TTL, sessionId);
-      await redisClient.setEx(activeSessionKey, this.SESSION_TTL, sessionId);
+      await Promise.all([
+        redisClient.set(this.getSessionKey(userId), sessionData, { ttl: this.SESSION_TTL }),
+        redisClient.set(this.getSessionIdKey(sessionId), userId.toString(), { ttl: this.SESSION_TTL }),
+        redisClient.set(this.getActiveSessionKey(userId), sessionId, { ttl: this.SESSION_TTL }),
+        redisClient.set(this.getUserSessionsKey(userId), sessionId, { ttl: this.SESSION_TTL })
+      ]);
 
       return {
         sessionId,
@@ -115,6 +47,39 @@ class SessionService {
     }
   }
 
+  static async getActiveSession(userId) {
+    try {
+      if (!userId) {
+        console.error('getActiveSession: userId is required');
+        return null;
+      }
+
+      const activeSessionKey = this.getActiveSessionKey(userId);
+      const sessionId = await redisClient.get(activeSessionKey);
+
+      if (!sessionId) {
+        return null;
+      }
+
+      const sessionKey = this.getSessionKey(userId);
+      const sessionData = await redisClient.get(sessionKey);
+
+      if (!sessionData) {
+        await redisClient.del(activeSessionKey);
+        return null;
+      }
+
+      return {
+        ...sessionData,
+        userId,
+        sessionId
+      };
+    } catch (error) {
+      console.error('Get active session error:', error);
+      return null;
+    }
+  }
+
   static async validateSession(userId, sessionId) {
     try {
       if (!userId || !sessionId) {
@@ -125,7 +90,6 @@ class SessionService {
         };
       }
 
-      // 활성 세션 확인
       const activeSessionKey = this.getActiveSessionKey(userId);
       const activeSessionId = await redisClient.get(activeSessionKey);
 
@@ -135,6 +99,9 @@ class SessionService {
           sessionId,
           activeSessionId
         });
+
+        await this.removeAllUserSessions(userId);
+
         return {
           isValid: false,
           error: 'INVALID_SESSION',
@@ -142,10 +109,7 @@ class SessionService {
         };
       }
 
-      // 세션 데이터 검증
-      const sessionKey = this.getSessionKey(userId);
-      const sessionData = await this.getJson(sessionKey);
-
+      const sessionData = await redisClient.get(this.getSessionKey(userId));
       if (!sessionData) {
         return {
           isValid: false,
@@ -154,10 +118,8 @@ class SessionService {
         };
       }
 
-      // 세션 만료 시간 검증
-      const SESSION_TIMEOUT = 24 * 60 * 60 * 1000; // 24시간
-      if (Date.now() - sessionData.lastActivity > SESSION_TIMEOUT) {
-        await this.removeSession(userId);
+      if (Date.now() - sessionData.lastActivity > this.SESSION_TTL * 1000) {
+        await this.removeAllUserSessions(userId);
         return {
           isValid: false,
           error: 'SESSION_EXPIRED',
@@ -165,24 +127,12 @@ class SessionService {
         };
       }
 
-      // 세션 데이터 갱신
       sessionData.lastActivity = Date.now();
-      
-      // 갱신된 세션 데이터 저장
-      const updated = await this.setJson(sessionKey, sessionData, this.SESSION_TTL);
-      if (!updated) {
-        return {
-          isValid: false,
-          error: 'UPDATE_FAILED',
-          message: '세션 갱신에 실패했습니다.'
-        };
-      }
-
-      // 관련 키들의 만료 시간 갱신
       await Promise.all([
-        redisClient.expire(activeSessionKey, this.SESSION_TTL),
-        redisClient.expire(this.getUserSessionsKey(userId), this.SESSION_TTL),
-        redisClient.expire(this.getSessionIdKey(sessionId), this.SESSION_TTL)
+        redisClient.set(this.getSessionKey(userId), sessionData, { ttl: this.SESSION_TTL }),
+        redisClient.set(activeSessionKey, sessionId, { ttl: this.SESSION_TTL }),
+        redisClient.set(this.getUserSessionsKey(userId), sessionId, { ttl: this.SESSION_TTL }),
+        redisClient.set(this.getSessionIdKey(sessionId), userId.toString(), { ttl: this.SESSION_TTL })
       ]);
 
       return {
@@ -200,6 +150,87 @@ class SessionService {
     }
   }
 
+  static async removeAllUserSessions(userId) {
+    try {
+      const userSessionsKey = this.getUserSessionsKey(userId);
+      const activeSessionKey = this.getActiveSessionKey(userId);
+      const sessionKey = this.getSessionKey(userId);
+      const oldSessionId = await redisClient.get(userSessionsKey);
+
+      const deletePromises = [
+        redisClient.del(sessionKey),
+        redisClient.del(userSessionsKey),
+        redisClient.del(activeSessionKey)
+      ];
+
+      if (oldSessionId) {
+        deletePromises.push(redisClient.del(this.getSessionIdKey(oldSessionId)));
+      }
+
+      await Promise.all(deletePromises);
+      return true;
+    } catch (error) {
+      console.error('Remove all user sessions error:', error);
+      return false;
+    }
+  }
+
+  static async updateLastActivity(userId) {
+    try {
+      if (!userId) {
+        console.error('updateLastActivity: userId is required');
+        return false;
+      }
+
+      const sessionKey = this.getSessionKey(userId);
+      const sessionData = await redisClient.get(sessionKey);
+
+      if (!sessionData) {
+        console.error('updateLastActivity: No session found for user', userId);
+        return false;
+      }
+
+      // 세션 데이터 갱신
+      sessionData.lastActivity = Date.now();
+
+      // Promise.all을 사용하여 모든 관련 키의 TTL 갱신
+      const activeSessionKey = this.getActiveSessionKey(userId);
+      const userSessionsKey = this.getUserSessionsKey(userId);
+
+      await Promise.all([
+        redisClient.set(sessionKey, sessionData, { ttl: this.SESSION_TTL }),
+        redisClient.set(activeSessionKey, sessionData.sessionId, { ttl: this.SESSION_TTL }),
+        redisClient.set(userSessionsKey, sessionData.sessionId, { ttl: this.SESSION_TTL }),
+        redisClient.set(this.getSessionIdKey(sessionData.sessionId), userId.toString(), { ttl: this.SESSION_TTL })
+      ]);
+
+      return true;
+
+    } catch (error) {
+      console.error('Update last activity error:', error);
+      return false;
+    }
+  }
+
+  static generateSessionId() {
+    return crypto.randomBytes(32).toString('hex');
+  }
+
+  static getSessionKey(userId) {
+    return `${this.SESSION_PREFIX}${userId}`;
+  }
+
+  static getSessionIdKey(sessionId) {
+    return `${this.SESSION_ID_PREFIX}${sessionId}`;
+  }
+
+  static getUserSessionsKey(userId) {
+    return `${this.USER_SESSIONS_PREFIX}${userId}`;
+  }
+
+  static getActiveSessionKey(userId) {
+    return `${this.ACTIVE_SESSION_PREFIX}${userId}`;
+  }
   static async removeSession(userId, sessionId = null) {
     try {
       const userSessionsKey = this.getUserSessionsKey(userId);
@@ -226,135 +257,13 @@ class SessionService {
           ]);
         }
       }
+      return true;
     } catch (error) {
       console.error('Session removal error:', error);
-      throw error;
-    }
-  }
-
-  static async removeAllUserSessions(userId) {
-    try {
-      const activeSessionKey = this.getActiveSessionKey(userId);
-      const userSessionsKey = this.getUserSessionsKey(userId);
-      const sessionId = await redisClient.get(userSessionsKey);
-
-      const deletePromises = [
-        redisClient.del(activeSessionKey),
-        redisClient.del(userSessionsKey)
-      ];
-
-      if (sessionId) {
-        deletePromises.push(
-          redisClient.del(this.getSessionKey(userId)),
-          redisClient.del(this.getSessionIdKey(sessionId))
-        );
-      }
-
-      await Promise.all(deletePromises);
-      return true;
-    } catch (error) {
-      console.error('Remove all user sessions error:', error);
       return false;
     }
-  }
-
-  static async updateLastActivity(userId) {
-    try {
-      if (!userId) {
-        console.error('updateLastActivity: userId is required');
-        return false;
-      }
-
-      const sessionKey = this.getSessionKey(userId);
-      const sessionData = await this.getJson(sessionKey);
-
-      if (!sessionData) {
-        console.error('updateLastActivity: No session found for user', userId);
-        return false;
-      }
-
-      // 세션 데이터 갱신
-      sessionData.lastActivity = Date.now();
-      
-      // 갱신된 세션 데이터 저장
-      const updated = await this.setJson(sessionKey, sessionData, this.SESSION_TTL);
-      if (!updated) {
-        console.error('updateLastActivity: Failed to update session data');
-        return false;
-      }
-
-      // 관련 키들의 만료 시간도 함께 갱신
-      const activeSessionKey = this.getActiveSessionKey(userId);
-      const userSessionsKey = this.getUserSessionsKey(userId);
-      if (sessionData.sessionId) {
-        const sessionIdKey = this.getSessionIdKey(sessionData.sessionId);
-        await Promise.all([
-          redisClient.expire(activeSessionKey, this.SESSION_TTL),
-          redisClient.expire(userSessionsKey, this.SESSION_TTL),
-          redisClient.expire(sessionIdKey, this.SESSION_TTL)
-        ]);
-      }
-
-      return true;
-
-    } catch (error) {
-      console.error('Update last activity error:', error);
-      return false;
-    }
-  }  
-  
-  static async getActiveSession(userId) {
-    try {
-      if (!userId) {
-        console.error('getActiveSession: userId is required');
-        return null;
-      }
-
-      const activeSessionKey = this.getActiveSessionKey(userId);
-      const sessionId = await redisClient.get(activeSessionKey);
-
-      if (!sessionId) {
-        return null;
-      }
-
-      const sessionKey = this.getSessionKey(userId);
-      const sessionData = await this.getJson(sessionKey);
-
-      if (!sessionData) {
-        await redisClient.del(activeSessionKey);
-        return null;
-      }
-
-      return {
-        ...sessionData,
-        userId,
-        sessionId
-      };
-    } catch (error) {
-      console.error('Get active session error:', error);
-      return null;
-    }
-  }
-
-  static getSessionKey(userId) {
-    return `${this.SESSION_PREFIX}${userId}`;
-  }
-
-  static getSessionIdKey(sessionId) {
-    return `${this.SESSION_ID_PREFIX}${sessionId}`;
-  }
-
-  static getUserSessionsKey(userId) {
-    return `${this.USER_SESSIONS_PREFIX}${userId}`;
-  }
-
-  static getActiveSessionKey(userId) {
-    return `${this.ACTIVE_SESSION_PREFIX}${userId}`;
-  }
-
-  static generateSessionId() {
-    return crypto.randomBytes(32).toString('hex');
   }
 }
+
 
 module.exports = SessionService;
