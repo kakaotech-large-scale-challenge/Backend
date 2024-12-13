@@ -19,6 +19,8 @@ const s3AWS = new AWS.S3({
   region: process.env.AWS_REGION, // AWS Region
 });
 
+const BUCKET_NAME = process.env.S3_BUCKET_NAME;
+
 // AWS S3 설정
 // const s3 = new S3Client({
 const s3 = new AWS.S3({
@@ -29,7 +31,7 @@ const s3 = new AWS.S3({
   },
 });
 
-const BUCKET_NAME = process.env.S3_BUCKET_NAME;
+
 
 // // 안전한 파일명 생성 함수 (타임스탬프와 랜덤값 조합)
 // const generateSafeFilename = (originalFilename) => {

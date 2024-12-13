@@ -1,8 +1,18 @@
+const AWS = require('aws-sdk'); // 이 라인 추가
 const bcrypt = require('bcryptjs');
-const User = require('../models/User');
+// const User = require('../models/User');
 const { upload } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs').promises;
+
+// S3 설정
+const s3 = new AWS.S3({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  region: process.env.AWS_REGION
+});
+
+const BUCKET_NAME = process.env.S3_BUCKET_NAME;
 
 // 회원가입 처리 함수
 exports.register = async (req, res) => {
@@ -105,7 +115,6 @@ exports.register = async (req, res) => {
 // 사용자 프로필 조회 함수
 exports.getProfile = async (req, res) => {
   try {
-    // 비밀번호를 제외한 사용자 정보 조회
     const user = await User.findById(req.user.id).select('-password');
     if (!user) {
       return res.status(404).json({
@@ -114,17 +123,15 @@ exports.getProfile = async (req, res) => {
       });
     }
 
-    // 프로필 정보 반환
     res.json({
       success: true,
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
-        profileImage: user.profileImage
+        profileImageUrl: user.profileImage // S3 URL
       }
     });
-
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({
@@ -184,7 +191,6 @@ exports.updateProfile = async (req, res) => {
 // 프로필 이미지 업로드 함수
 exports.uploadProfileImage = async (req, res) => {
   try {
-    // 파일 존재 여부 확인
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -198,8 +204,11 @@ exports.uploadProfileImage = async (req, res) => {
     const maxSize = 5 * 1024 * 1024; // 5MB
 
     if (fileSize > maxSize) {
-      // 크기 초과 시 업로드된 파일 삭제
-      await fs.unlink(req.file.path);
+      await s3.deleteObject({
+        Bucket: BUCKET_NAME,
+        Key: req.file.key
+      }).promise();
+      
       return res.status(400).json({
         success: false,
         message: '파일 크기는 5MB를 초과할 수 없습니다.'
@@ -207,55 +216,35 @@ exports.uploadProfileImage = async (req, res) => {
     }
 
     if (!fileType.startsWith('image/')) {
-      // 이미지 파일이 아닌 경우 업로드된 파일 삭제
-      await fs.unlink(req.file.path);
+      await s3.deleteObject({
+        Bucket: BUCKET_NAME,
+        Key: req.file.key
+      }).promise();
+
       return res.status(400).json({
         success: false,
         message: '이미지 파일만 업로드할 수 있습니다.'
       });
     }
 
-    // 사용자 조회
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      // 사용자가 없는 경우 업로드된 파일 삭제
-      await fs.unlink(req.file.path);
-      return res.status(404).json({
-        success: false,
-        message: '사용자를 찾을 수 없습니다.'
-      });
-    }
-
-    // 기존 프로필 이미지 삭제
-    if (user.profileImage) {
-      const oldImagePath = path.join(__dirname, '..', user.profileImage);
-      try {
-        await fs.access(oldImagePath);
-        await fs.unlink(oldImagePath);
-      } catch (error) {
-        console.error('Old profile image delete error:', error);
-      }
-    }
-
-    // 새 이미지 경로 저장
-    const imageUrl = `/uploads/${req.file.filename}`;
-    user.profileImage = imageUrl;
-    await user.save();
-
+    // S3 업로드 성공 시 URL과 Key 반환
     res.json({
       success: true,
-      message: '프로필 이미지가 업데이트되었습니다.',
-      imageUrl: user.profileImage
+      message: '프로필 이미지가 업로드되었습니다.',
+      imageUrl: req.file.location,
+      imageKey: req.file.key
     });
 
   } catch (error) {
     console.error('Profile image upload error:', error);
-    // 업로드 실패 시 임시 파일 삭제
     if (req.file) {
       try {
-        await fs.unlink(req.file.path);
-      } catch (unlinkError) {
-        console.error('File delete error:', unlinkError);
+        await s3.deleteObject({
+          Bucket: BUCKET_NAME,
+          Key: req.file.key
+        }).promise();
+      } catch (deleteError) {
+        console.error('File delete error:', deleteError);
       }
     }
     res.status(500).json({
@@ -268,29 +257,19 @@ exports.uploadProfileImage = async (req, res) => {
 // 프로필 이미지 삭제 함수
 exports.deleteProfileImage = async (req, res) => {
   try {
-    // 사용자 조회
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({
+    const { key } = req.body; // 클라이언트에서 전달받은 이미지 키
+
+    if (!key) {
+      return res.status(400).json({
         success: false,
-        message: '사용자를 찾을 수 없습니다.'
+        message: '이미지 키가 제공되지 않았습니다.'
       });
     }
 
-    // 기존 프로필 이미지가 있으면 삭제
-    if (user.profileImage) {
-      const imagePath = path.join(__dirname, '..', user.profileImage);
-      try {
-        await fs.access(imagePath);
-        await fs.unlink(imagePath);
-      } catch (error) {
-        console.error('Profile image delete error:', error);
-      }
-
-      // DB에서 이미지 정보 제거
-      user.profileImage = '';
-      await user.save();
-    }
+    await s3.deleteObject({
+      Bucket: BUCKET_NAME,
+      Key: key
+    }).promise();
 
     res.json({
       success: true,
@@ -306,10 +285,10 @@ exports.deleteProfileImage = async (req, res) => {
   }
 };
 
+
 // 회원 탈퇴 처리 함수
 exports.deleteAccount = async (req, res) => {
   try {
-    // 사용자 조회
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({
@@ -318,18 +297,17 @@ exports.deleteAccount = async (req, res) => {
       });
     }
 
-    // 프로필 이미지가 있다면 파일 시스템에서 삭제
-    if (user.profileImage) {
-      const imagePath = path.join(__dirname, '..', user.profileImage);
+    if (user.profileImageKey) {
       try {
-        await fs.access(imagePath);
-        await fs.unlink(imagePath);
+        await s3.deleteObject({
+          Bucket: BUCKET_NAME,
+          Key: user.profileImageKey
+        }).promise();
       } catch (error) {
         console.error('Profile image delete error:', error);
       }
     }
 
-    // DB에서 사용자 정보 삭제
     await user.deleteOne();
 
     res.json({
