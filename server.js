@@ -97,13 +97,13 @@ app.use('/api/v1/health', healthRouter);
 // const io = socketIO(server, { cors: corsOptions });
 const io = socketIO(server, {
   cors: corsOptions,
-  pingTimeout: 60000,     // 60초
-  pingInterval: 25000,    // 25초
-  connectTimeout: 30000,  // 30초
+  pingTimeout: 120000,     // 60초
+  pingInterval: 60000,    // 25초
+  connectTimeout: 60000,  // 30초
   reconnection: true,
-  reconnectionAttempts: 5,
-  reconnectionDelay: 1000,
-  reconnectionDelayMax: 5000,
+  reconnectionAttempts: 10,
+  reconnectionDelay: 2000,
+  reconnectionDelayMax: 10000,
   maxHttpBufferSize: 1e8 
 });
 require('./sockets/chat')(io);
