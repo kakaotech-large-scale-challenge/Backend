@@ -442,22 +442,46 @@ exports.downloadFile = async (req, res) => {
       Key: file.filename,
     };
     
-    const command = new GetObjectCommand(params);
-    const objectStream = await s3.send(command);
+    // const command = new GetObjectCommand(params);
+    // const objectStream = await s3.send(command);
 
-    res.set({
-      'Content-Type': file.mimetype,
-      'Content-Length': file.size,
-      'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalname)}"`,
-      'Cache-Control': 'private, no-cache, no-store, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
-    });
+    // res.set({
+    //   'Content-Type': file.mimetype,
+    //   'Content-Length': file.size,
+    //   'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalname)}"`,
+    //   'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+    //   'Pragma': 'no-cache',
+    //   'Expires': '0'
+    // });
 
-    objectStream.Body.pipe(res);
+    // objectStream.Body.pipe(res);
+
+    s3AWS.getObject(params).createReadStream()
+      .on('error', (error) => {
+        console.error('S3 download error:', error);
+        res.status(500).json({
+          success: false,
+          message: '파일 다운로드 중 오류가 발생했습니다.',
+          error: error.message
+        });
+      })
+      .pipe(res.set({
+        'Content-Type': file.mimetype,
+        'Content-Length': file.size,
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalname)}"`,
+        'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }));
+
 
   } catch (error) {
-    handleFileError(error, res);
+    console.error('File download error:', error);
+    res.status(500).json({
+      success: false,
+      message: '파일 다운로드 중 오류가 발생했습니다.',
+      error: error.message
+    });
   }
 };
 
